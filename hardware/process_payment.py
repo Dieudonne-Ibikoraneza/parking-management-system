@@ -1,11 +1,13 @@
-import csv
 import serial
 import time
 import serial.tools.list_ports
 import platform
 from datetime import datetime
+from database import ParkingDatabase
 
-CSV_FILE = 'db.csv'
+# Initialize database
+db = ParkingDatabase()
+
 RATE_PER_MINUTE = 5  # Amount charged per minute
 
 
@@ -49,79 +51,68 @@ def parse_arduino_data(line):
 
 def process_payment(plate, balance, ser):
     try:
-        with open(CSV_FILE, 'r') as f:
-            rows = list(csv.reader(f))
+        # Get unpaid record for this plate
+        record = db.get_unpaid_record(plate)
 
-        header = rows[0]
-        entries = rows[1:]
-        found = False
-
-        for i, row in enumerate(entries):
-            if row[3] == plate and row[5] == '0':
-                found = True
-                entry_time_str = row[1]
-                entry_time = datetime.strptime(entry_time_str, '%Y-%m-%d %H:%M:%S')
-                exit_time = datetime.now()
-                minutes_spent = int((exit_time - entry_time).total_seconds() / 60) + 1
-                amount_due = minutes_spent * RATE_PER_MINUTE
-
-                entries[i][2] = exit_time.strftime('%Y-%m-%d %H:%M:%S')
-                entries[i][4] = str(amount_due)
-
-                if balance < amount_due:
-                    print("[PAYMENT] Insufficient balance")
-                    ser.write(b'I\n')
-                    return
-                else:
-                    new_balance = balance - amount_due
-
-                    # Wait for Arduino to send "READY"
-                    print("[WAIT] Waiting for Arduino to be READY...")
-                    start_time = time.time()
-                    while True:
-                        if ser.in_waiting:
-                            arduino_response = ser.readline().decode().strip()
-                            print(f"[ARDUINO] {arduino_response}")
-                            if arduino_response == "READY":
-                                break
-                        if time.time() - start_time > 5:
-                            print("[ERROR] Timeout waiting for Arduino READY")
-                            return
-
-                    # Send new balance
-                    ser.write(f"{new_balance}\r\n".encode())  # more universal
-                    print(f"[PAYMENT] Sent new balance {new_balance}")
-
-                    # Wait for confirmation with timeout
-                    start_time = time.time()
-                    print("[WAIT] Waiting for Arduino confirmation...")
-                    while True:
-                        if ser.in_waiting:
-                            confirm = ser.readline().decode().strip()
-                            print(f"[ARDUINO] {confirm}")
-                            if "DONE" in confirm:
-                                print("[ARDUINO] Write confirmed")
-                                entries[i][5] = '1'
-                                break
-
-                        # Add timeout condition
-                        if time.time() - start_time > 10:
-                            print("[ERROR] Timeout waiting for confirmation")
-                            break
-
-                        # Small delay to avoid CPU spinning
-                        time.sleep(0.1)
-
-                break
-
-        if not found:
+        if not record:
             print("[PAYMENT] Plate not found or already paid.")
             return
 
-        with open(CSV_FILE, 'w', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(header)
-            writer.writerows(entries)
+        # Calculate parking fee
+        entry_time = record['entry_time']
+        current_time = datetime.now()
+        minutes_spent = int((current_time - entry_time).total_seconds() / 60) + 1
+        amount_due = minutes_spent * RATE_PER_MINUTE
+
+        print(f"[PAYMENT] Plate: {plate}, Minutes: {minutes_spent}, Due: ${amount_due}")
+
+        if balance < amount_due:
+            print("[PAYMENT] Insufficient balance")
+            ser.write(b'I\n')
+            return
+        else:
+            new_balance = balance - amount_due
+
+            # Wait for Arduino to send "READY"
+            print("[WAIT] Waiting for Arduino to be READY...")
+            start_time = time.time()
+            while True:
+                if ser.in_waiting:
+                    arduino_response = ser.readline().decode().strip()
+                    print(f"[ARDUINO] {arduino_response}")
+                    if arduino_response == "READY":
+                        break
+                if time.time() - start_time > 5:
+                    print("[ERROR] Timeout waiting for Arduino READY")
+                    return
+
+            # Send new balance
+            ser.write(f"{new_balance}\r\n".encode())
+            print(f"[PAYMENT] Sent new balance {new_balance}")
+
+            # Wait for confirmation with timeout
+            start_time = time.time()
+            print("[WAIT] Waiting for Arduino confirmation...")
+            while True:
+                if ser.in_waiting:
+                    confirm = ser.readline().decode().strip()
+                    print(f"[ARDUINO] {confirm}")
+                    if "DONE" in confirm:
+                        print("[ARDUINO] Write confirmed")
+                        # Update database with payment
+                        if db.update_payment_status(plate, amount_due, 1):
+                            print(f"[SUCCESS] Payment processed for {plate}")
+                        else:
+                            print(f"[ERROR] Failed to update payment status for {plate}")
+                        break
+
+                # Add timeout condition
+                if time.time() - start_time > 10:
+                    print("[ERROR] Timeout waiting for confirmation")
+                    break
+
+                # Small delay to avoid CPU spinning
+                time.sleep(0.1)
 
     except Exception as e:
         print(f"[ERROR] Payment processing failed: {e}")

@@ -6,27 +6,25 @@ import os
 import time
 import serial
 import serial.tools.list_ports
-import csv
 from collections import Counter
+from database import ParkingDatabase
 
 # Load YOLOv8 model
 model = YOLO('../model_dev/runs/detect/train/weights/best.pt')
 
 # Configurations
 SAVE_DIR = 'plates'
-CSV_FILE = 'db.csv'
 ENTRY_COOLDOWN = 300  # seconds
 MAX_DISTANCE = 50     # cm
 MIN_DISTANCE = 0      # cm
 CAPTURE_THRESHOLD = 3 # number of consistent reads before logging
 GATE_OPEN_TIME = 15   # seconds
 
-# Ensure directories and CSV exist
+# Initialize database
+db = ParkingDatabase()
+
+# Ensure directories exist
 os.makedirs(SAVE_DIR, exist_ok=True)
-if not os.path.exists(CSV_FILE):
-    with open(CSV_FILE, 'w', newline='') as f:
-        writer = csv.writer(f)
-        writer.writerow(['no', 'entry_time', 'exit_time', 'car_plate', 'due payment', 'payment status'])
 
 # Auto-detect Arduino Serial Port
 def detect_arduino_port():
@@ -49,16 +47,6 @@ def read_distance(arduino):
         return float(val)
     except (UnicodeDecodeError, ValueError):
         return None
-
-# Check for existing unpaid entry in CSV
-def has_unpaid_record(plate):
-    with open(CSV_FILE, 'r', newline='') as f:
-        reader = csv.reader(f)
-        next(reader, None)  # skip header
-        for row in reader:
-            if row[3] == plate and row[5] == '0':
-                return True
-    return False
 
 # Initialize Arduino
 arduino_port = detect_arduino_port()
@@ -84,7 +72,6 @@ cv2.resizeWindow('Webcam Feed', 800, 600)
 plate_buffer = []
 last_saved_plate = None
 last_entry_time = 0
-entry_count = sum(1 for _ in open(CSV_FILE)) - 1
 
 print("[SYSTEM] Ready. Press 'q' to exit.")
 
@@ -132,27 +119,23 @@ try:
                     now = time.time()
 
                     # Only save if not duplicate unpaid
-                    if not has_unpaid_record(common):
+                    if not db.has_unpaid_record(common):
                         # Optional cooldown logic still applies
                         if common != last_saved_plate or (now - last_entry_time) > ENTRY_COOLDOWN:
-                            with open(CSV_FILE, 'a', newline='') as f:
-                                writer = csv.writer(f)
-                                entry_count += 1
-                                writer.writerow([
-                                    entry_count,
-                                    time.strftime('%Y-%m-%d %H:%M:%S'),
-                                    '', common, '', '0'
-                                ])
-                            print(f"[NEW] Logged plate {common}")
+                            entry_id = db.add_entry(common)
+                            if entry_id:
+                                print(f"[NEW] Logged plate {common} with ID {entry_id}")
 
-                            # Gate actuation
-                            if arduino:
-                                arduino.write(b'1')
-                                time.sleep(GATE_OPEN_TIME)
-                                arduino.write(b'0')
+                                # Gate actuation
+                                if arduino:
+                                    arduino.write(b'1')
+                                    time.sleep(GATE_OPEN_TIME)
+                                    arduino.write(b'0')
 
-                            last_saved_plate = common
-                            last_entry_time = now
+                                last_saved_plate = common
+                                last_entry_time = now
+                            else:
+                                print(f"[ERROR] Failed to log plate {common}")
                         else:
                             print(f"[SKIPPED] Cooldown: {common}")
                     else:

@@ -1,41 +1,50 @@
-import csv
-import os
+from database import ParkingDatabase
+from datetime import datetime
 
-csv_file = 'db.csv'
+# Initialize database
+db = ParkingDatabase()
 
-def mark_payment_success(plate_number):
-    if not os.path.exists(csv_file):
-        print("[ERROR] Log file does not exist.")
-        return
 
-    updated = False
-    rows = []
+def mark_payment_success(plate_number, amount=None):
+    """Mark a parking record as paid"""
+    try:
+        # Get the unpaid record
+        record = db.get_unpaid_record(plate_number)
 
-    # Read existing data
-    with open(csv_file, 'r') as f:
-        reader = csv.reader(f)
-        header = next(reader)
-        print(f"[DEBUG] Header: {header}")  # Print header to verify columns
-        for row in reader:
-            print(f"[DEBUG] Row: {row}")  # Print each row to inspect data
-            # Match the plate with unpaid status
-            if row[3] == plate_number and row[5] == '0':  # Use correct indices
-                row[5] = '1'  # Mark as paid
-                updated = True
-            rows.append(row)
+        if not record:
+            print(f"[INFO] No unpaid record found for {plate_number}")
+            return False
 
-    if updated:
-        # Write back updated data
-        with open(csv_file, 'w', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(header)
-            writer.writerows(rows)
-        print(f"[UPDATED] Payment status set to 1 for {plate_number}")
-    else:
-        print(f"[INFO] No unpaid record found for {plate_number}")
+        # Calculate amount if not provided
+        if amount is None:
+            entry_time = record['entry_time']
+            current_time = datetime.now()
+            minutes_spent = int((current_time - entry_time).total_seconds() / 60) + 1
+            amount = minutes_spent * 5  # 5 per minute
+
+        # Update payment status
+        if db.update_payment_status(plate_number, amount, 1):
+            print(f"[SUCCESS] Payment of ${amount} marked for {plate_number}")
+            return True
+        else:
+            print(f"[ERROR] Failed to update payment for {plate_number}")
+            return False
+
+    except Exception as e:
+        print(f"[ERROR] {e}")
+        return False
+
 
 # ==== TESTING USAGE ====
 if __name__ == "__main__":
     plate = input("Enter plate number to mark as paid: ").strip().upper()
-    print(f"[DEBUG] Input plate: {plate}")  # Print input for verification
-    mark_payment_success(plate)
+    amount_input = input("Enter amount (or press Enter to auto-calculate): ").strip()
+
+    amount = None
+    if amount_input:
+        try:
+            amount = float(amount_input)
+        except ValueError:
+            print("[ERROR] Invalid amount entered, using auto-calculation")
+
+    mark_payment_success(plate, amount)
