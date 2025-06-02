@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Parking System Dashboard</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f4f4f9;
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .log-section {
+            margin-bottom: 30px;
+        }
+        .log-section h2 {
+            color: #444;
+            border-bottom: 2px solid #007bff;
+            padding-bottom: 5px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+            background-color: #fff;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border: 1px solid #ddd;
+        }
+        th {
+            background-color: #007bff;
+            color: white;
+        }
+        tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        .alert-row {
+            background-color: #ffe6e6;
+            font-weight: bold;
+        }
+        .refresh-btn {
+            display: block;
+            margin: 20px auto;
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        .refresh-btn:hover {
+            background-color: #0056b3;
+        }
+        .error {
+            color: red;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <h1>Parking System Dashboard</h1>
+    <div class="container">
+        <button class="refresh-btn" onclick="fetchLogs()">Refresh Logs</button>
+        <div id="error" class="error"></div>
+
+        <div class="log-section">
+            <h2>Vehicle Check-Ins</h2>
+            <table id="checkin-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Plate Number</th>
+                        <th>Entry Time</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+
+        <div class="log-section">
+            <h2>Vehicle Check-Outs</h2>
+            <table id="checkout-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Plate Number</th>
+                        <th>Exit Time</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+
+        <div class="log-section">
+            <h2>Payments</h2>
+            <table id="payment-table">
+                <thead>
+                    <tr>
+                        <th>Plate Number</th>
+                        <th>Amount</th>
+                        <th>Payment Time</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+
+        <div class="log-section">
+            <h2>Alerts (Unauthorized Exit Attempts)</h2>
+            <table id="alert-table">
+                <thead>
+                    <tr>
+                        <th>Plate Number</th>
+                        <th>Timestamp</th>
+                        <th>Reason</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        async function fetchLogs() {
+            try {
+                const response = await fetch('http://localhost:5000/api/logs');
+                if (!response.ok) throw new Error('Failed to fetch logs');
+                const data = await response.json();
+
+                const errorDiv = document.getElementById('error');
+                errorDiv.textContent = '';
+
+                // Update Check-Ins Table
+                const checkinBody = document.querySelector('#checkin-table tbody');
+                checkinBody.innerHTML = '';
+                data.checkins.forEach(record => {
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td>${record.id}</td>
+                        <td>${record.car_plate}</td>
+                        <td>${record.entry_time}</td>
+                    `;
+                    checkinBody.appendChild(row);
+                });
+
+                // Update Check-Outs Table
+                const checkoutBody = document.querySelector('#checkout-table tbody');
+                checkoutBody.innerHTML = '';
+                data.checkouts.forEach(record => {
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td>${record.id}</td>
+                        <td>${record.car_plate}</td>
+                        <td>${record.exit_time}</td>
+                    `;
+                    checkoutBody.appendChild(row);
+                });
+
+                // Update Payments Table
+                const paymentBody = document.querySelector('#payment-table tbody');
+                paymentBody.innerHTML = '';
+                data.payments.forEach(record => {
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td>${record.car_plate}</td>
+                        <td>$${record.due_payment.toFixed(2)}</td>
+                        <td>${record.created_at}</td>
+                    `;
+                    paymentBody.appendChild(row);
+                });
+
+                // Update Alerts Table
+                const alertBody = document.querySelector('#alert-table tbody');
+                alertBody.innerHTML = '';
+                data.alerts.forEach(record => {
+                    const row = document.createElement('tr');
+                    row.classList.add('alert-row');
+                    row.innerHTML = `
+                        <td>${record.car_plate}</td>
+                        <td>${record.timestamp}</td>
+                        <td>${record.reason}</td>
+                    `;
+                    alertBody.appendChild(row);
+                });
+            } catch (error) {
+                document.getElementById('error').textContent = `Error: ${error.message}`;
+            }
+        }
+
+        // Initial fetch
+        fetchLogs();
+
+        // Auto-refresh every 30 seconds
+        setInterval(fetchLogs, 30000);
+    </script>
+</body>
+</html>

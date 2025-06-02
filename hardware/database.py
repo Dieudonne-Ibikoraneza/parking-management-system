@@ -1,198 +1,169 @@
 import psycopg2
-from psycopg2.extras import RealDictCursor
 from datetime import datetime
-import os
-from contextlib import contextmanager
-
-# Database configuration
-DB_CONFIG = {
-    'host': os.getenv('DB_HOST', 'localhost'),
-    'database': os.getenv('DB_NAME', 'parking_system'),
-    'user': os.getenv('DB_USER', 'postgres'),
-    'password': os.getenv('DB_PASSWORD', 'password'),
-    'port': os.getenv('DB_PORT', '5432')
-}
-
 
 class ParkingDatabase:
     def __init__(self):
-        self.config = DB_CONFIG
-        self.init_database()
-
-    @contextmanager
-    def get_connection(self):
-        """Context manager for database connections"""
-        conn = None
-        try:
-            conn = psycopg2.connect(**self.config)
-            yield conn
-        except Exception as e:
-            if conn:
-                conn.rollback()
-            raise e
-        finally:
-            if conn:
-                conn.close()
-
-    def init_database(self):
-        """Initialize database and create tables if they don't exist"""
-        create_table_query = """
-                             CREATE TABLE IF NOT EXISTS parking_records \
-                             ( \
-                                 id \
-                                 SERIAL \
-                                 PRIMARY \
-                                 KEY, \
-                                 entry_time \
-                                 TIMESTAMP \
-                                 NOT \
-                                 NULL, \
-                                 exit_time \
-                                 TIMESTAMP, \
-                                 car_plate \
-                                 VARCHAR \
-                             ( \
-                                 10 \
-                             ) NOT NULL,
-                                 due_payment DECIMAL \
-                             ( \
-                                 10, \
-                                 2 \
-                             ) DEFAULT 0,
-                                 payment_status INTEGER DEFAULT 0,
-                                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                                 );
-
-                             CREATE INDEX IF NOT EXISTS idx_car_plate ON parking_records(car_plate);
-                             CREATE INDEX IF NOT EXISTS idx_payment_status ON parking_records(payment_status); \
-                             """
-
-        try:
-            with self.get_connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(create_table_query)
-                    conn.commit()
-                    print("[DATABASE] Tables initialized successfully")
-        except Exception as e:
-            print(f"[DATABASE ERROR] Failed to initialize: {e}")
+        self.conn = psycopg2.connect(
+            dbname="parking_system",
+            user="postgres",
+            password="password",  # Replace with your actual password
+            host="localhost",
+            port="5432"
+        )
+        self.cursor = self.conn.cursor()
 
     def add_entry(self, plate_number):
-        """Add new parking entry"""
-        query = """
-                INSERT INTO parking_records (entry_time, car_plate, payment_status)
-                VALUES (%s, %s, 0) RETURNING id \
-                """
-
         try:
-            with self.get_connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(query, (datetime.now(), plate_number))
-                    entry_id = cur.fetchone()[0]
-                    conn.commit()
-                    return entry_id
+            query = """
+                INSERT INTO parking_records (car_plate, entry_time, created_at)
+                VALUES (%s, %s, %s) RETURNING id
+            """
+            self.cursor.execute(query, (plate_number, datetime.now(), datetime.now()))
+            self.conn.commit()
+            return self.cursor.fetchone()[0]
         except Exception as e:
-            print(f"[DATABASE ERROR] Failed to add entry: {e}")
+            print(f"[ERROR] Failed to add entry: {e}")
+            self.conn.rollback()
             return None
 
     def has_unpaid_record(self, plate_number):
-        """Check if plate has unpaid parking record"""
         query = """
-                SELECT COUNT(*) \
-                FROM parking_records
-                WHERE car_plate = %s \
-                  AND payment_status = 0 \
-                  AND exit_time IS NULL \
-                """
-
-        try:
-            with self.get_connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(query, (plate_number,))
-                    count = cur.fetchone()[0]
-                    return count > 0
-        except Exception as e:
-            print(f"[DATABASE ERROR] Failed to check unpaid records: {e}")
-            return False
-
-    def get_unpaid_record(self, plate_number):
-        """Get unpaid record for a plate"""
-        query = """
-                SELECT * \
-                FROM parking_records
-                WHERE car_plate = %s \
-                  AND payment_status = 0 \
-                  AND exit_time IS NULL
-                ORDER BY entry_time DESC LIMIT 1 \
-                """
-
-        try:
-            with self.get_connection() as conn:
-                with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                    cur.execute(query, (plate_number,))
-                    return cur.fetchone()
-        except Exception as e:
-            print(f"[DATABASE ERROR] Failed to get unpaid record: {e}")
-            return None
-
-    def update_payment_status(self, plate_number, amount_due, new_status=1):
-        """Update payment status and due amount"""
-        query = """
-                UPDATE parking_records
-                SET payment_status = %s, \
-                    due_payment    = %s
-                WHERE car_plate = %s \
-                  AND payment_status = 0 \
-                  AND exit_time IS NULL RETURNING id \
-                """
-
-        try:
-            with self.get_connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(query, (new_status, amount_due, plate_number))
-                    result = cur.fetchone()
-                    conn.commit()
-                    return result is not None
-        except Exception as e:
-            print(f"[DATABASE ERROR] Failed to update payment: {e}")
-            return False
-
-    def record_exit(self, plate_number):
-        """Record exit time for paid vehicle"""
-        query = """
-                UPDATE parking_records
-                SET exit_time = %s
-                WHERE car_plate = %s \
-                  AND payment_status = 1 \
-                  AND exit_time IS NULL RETURNING id, entry_time, due_payment \
-                """
-
-        try:
-            with self.get_connection() as conn:
-                with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                    cur.execute(query, (datetime.now(), plate_number))
-                    result = cur.fetchone()
-                    conn.commit()
-                    return result
-        except Exception as e:
-            print(f"[DATABASE ERROR] Failed to record exit: {e}")
-            return None
+            SELECT id FROM parking_records
+            WHERE car_plate = %s AND payment_status = 0 AND exit_time IS NULL
+        """
+        self.cursor.execute(query, (plate_number,))
+        return bool(self.cursor.fetchone())
 
     def get_paid_record(self, plate_number):
-        """Check if plate has paid record without exit"""
         query = """
-                SELECT * \
-                FROM parking_records
-                WHERE car_plate = %s \
-                  AND payment_status = 1 \
-                  AND exit_time IS NULL
-                ORDER BY entry_time DESC LIMIT 1 \
-                """
+            SELECT * FROM parking_records
+            WHERE car_plate = %s AND payment_status = 1 AND exit_time IS NULL
+            ORDER BY entry_time DESC LIMIT 1
+        """
+        self.cursor.execute(query, (plate_number,))
+        record = self.cursor.fetchone()
+        if record:
+            return {
+                'id': record[0],
+                'entry_time': record[1],
+                'exit_time': record[2],
+                'car_plate': record[3],
+                'due_payment': record[4],
+                'payment_status': record[5],
+                'created_at': record[6]
+            }
+        return None
 
-        try:
-            with self.get_connection() as conn:
-                with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                    cur.execute(query, (plate_number,))
-                    return cur.fetchone()
-        except Exception as e:
-            print(f"[DATABASE ERROR] Failed to get paid record: {e}")
-            return None
+    def record_exit(self, plate_number):
+        query = """
+            UPDATE parking_records
+            SET exit_time = %s
+            WHERE car_plate = %s AND payment_status = 1 AND exit_time IS NULL
+            RETURNING id
+        """
+        self.cursor.execute(query, (datetime.now(), plate_number))
+        self.conn.commit()
+        return bool(self.cursor.fetchone())
+
+    def get_unpaid_record(self, plate_number):
+        query = """
+            SELECT * FROM parking_records
+            WHERE car_plate = %s AND payment_status = 0 AND exit_time IS NULL
+            ORDER BY entry_time DESC LIMIT 1
+        """
+        self.cursor.execute(query, (plate_number,))
+        record = self.cursor.fetchone()
+        if record:
+            return {
+                'id': record[0],
+                'entry_time': record[1],
+                'exit_time': record[2],
+                'car_plate': record[3],
+                'due_payment': record[4],
+                'payment_status': record[5],
+                'created_at': record[6]
+            }
+        return None
+
+    def update_payment_status(self, plate_number, amount, status):
+        query = """
+            UPDATE parking_records
+            SET due_payment = %s, payment_status = %s
+            WHERE car_plate = %s AND payment_status = 0 AND exit_time IS NULL
+            RETURNING id
+        """
+        self.cursor.execute(query, (amount, status, plate_number))
+        self.conn.commit()
+        return bool(self.cursor.fetchone())
+
+    def get_all_entries(self):
+        query = """
+            SELECT id, car_plate, entry_time
+            FROM parking_records
+            WHERE entry_time IS NOT NULL
+            ORDER BY entry_time DESC
+        """
+        self.cursor.execute(query)
+        return [
+            {
+                'id': row[0],
+                'car_plate': row[1],
+                'entry_time': row[2].strftime('%Y-%m-%d %H:%M:%S')
+            }
+            for row in self.cursor.fetchall()
+        ]
+
+    def get_all_exits(self):
+        query = """
+            SELECT id, car_plate, exit_time
+            FROM parking_records
+            WHERE exit_time IS NOT NULL
+            ORDER BY exit_time DESC
+        """
+        self.cursor.execute(query)
+        return [
+            {
+                'id': row[0],
+                'car_plate': row[1],
+                'exit_time': row[2].strftime('%Y-%m-%d %H:%M:%S')
+            }
+            for row in self.cursor.fetchall()
+        ]
+
+    def get_all_payments(self):
+        query = """
+            SELECT car_plate, due_payment, created_at
+            FROM parking_records
+            WHERE payment_status = 1
+            ORDER BY created_at DESC
+        """
+        self.cursor.execute(query)
+        return [
+            {
+                'car_plate': row[0],
+                'due_payment': float(row[1]),
+                'created_at': row[2].strftime('%Y-%m-%d %H:%M:%S')
+            }
+            for row in self.cursor.fetchall()
+        ]
+
+    def get_all_alerts(self):
+        query = """
+            SELECT car_plate, created_at, 'Unauthorized Exit' as reason
+            FROM parking_records
+            WHERE payment_status = 0 AND exit_time IS NOT NULL
+            ORDER BY created_at DESC
+        """
+        self.cursor.execute(query)
+        return [
+            {
+                'car_plate': row[0],
+                'timestamp': row[1].strftime('%Y-%m-%d %H:%M:%S'),
+                'reason': row[2]
+            }
+            for row in self.cursor.fetchall()
+        ]
+
+    def __del__(self):
+        self.cursor.close()
+        self.conn.close()
